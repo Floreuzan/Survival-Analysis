@@ -1,0 +1,1868 @@
+---
+title: "Lung Data - Survival Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<p>&nbsp;</p>
+
+
+```{r, message=F, warning=F}
+library(knitr)
+library(kableExtra)
+
+library(DataExplorer) # for EDA
+library(dlookr) # for outlier analysis
+library(summarytools)
+library(corrplot)
+
+library(survival)
+library(survminer)
+library(powerSurvEpi)
+library(rms)  # to extract survival times from KM curve, using survest function
+library(sm)  # to do quantile regression of survival data vs. continuous variable (sm.survival)
+
+library(glmulti)  # for best subsets selection of Cox PH model
+
+
+# for conditional survival plots
+library(condsurv)  # remotes::install_github("zabore/condsurv")
+
+# to extract survival probabilities, by group, from survfit (KM plot)
+library(survtools)  # remotes::install_github("RichardBirnie/survtools")
+
+# put this last so that if necessary, it masks stuff from above
+library(tidyverse)
+```
+
+<p>&nbsp;</p>
+
+## Introduction to Survival Analysis
+
+<p>&nbsp;</p>
+
+
+#### Presentation
+
+
+Generally, **survival analysis** is a collection of statistical procedures for data analysis for which the outcome variable of interest is time until an event occurs. 
+
+In the medical world, we typically think of survival analysis literally – tracking time until death. But, it’s more general than that – survival analysis models time until an event occurs (any event). This might be death of a biological organism. But it could also be the time until a hardware failure in a mechanical system, time until recovery, time someone remains unemployed after losing a job, time until a ripe tomato is eaten by a grazing deer, time until someone falls asleep in a workshop, etc. Survival analysis also goes by reliability theory in engineering, duration analysis in economics, and event history analysis in sociology.
+
+Type of events: death, disease, relapse, recovery...
+
+The goal of survival analysis is to:
+
+*   Goal 1: To estimate and interpret survivor and/or hazard functions from survival data.
+*   Goal 2: To compare survivor and/or hazard functions.
+*   Goal 3: To assess the relationship of explanatory variables to survival time
+
+<p>&nbsp;</p>
+
+
+#### Censored data
+
+
+One aspect that makes survival analysis difficult is the concept of censoring. In essence, censoring occurs when we have some information about individual survival time, but we don’t know the survival time exactly. There are 3 main reasons why this happens:
+
+*   Individual does not experience the event when the study is over.
+*   Individual is lost to follow-up during the study period.
+*   Individual withdraws from the study.
+
+
+
+There are 3 major times of censoring: right, left and interval censoring.
+
+
+*   1) Right-censored data
+
+
+In right censoring, the true survival times will always be equal to or greater than the observed survival time. We have $t_1$ = lower bound and $t_2$ = $\infty$. Consider the follow example where we have 3 patients (A, B, C) enrolled onto a clinical study that runs for some period of time (study end - study start).
+
+
+<center>
+
+![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\Censored_Data_EX1.PNG){width=50%}
+
+
+</center>
+
+
+1. Patient A requires no censoring since we know their exact survival time which is the time until death. 
+
+2. Patient B survives passed the end of the study and needs to be censored (indicated with the + at the end of the follow-up time).
+
+3. Patient C withdraws from the study and needs to be censored since they withdrew before the study ended.
+
+
+Note: This example is a bit unrealistic since it’s rare to have all patients enrolled at the same time in a study. In reality, patients would be enrolled at different times in the trial. But this example is meant more so to illustrate the concepts of censoring.
+
+
+
+*   2) Left-censored data
+
+In contrast to right-censoring, left censoring occurs when the person’s true survival time is less than or equal to the observed survival time. We have $t_1$ = 0 and $t_2$ = upper bound.
+
+<center>
+
+![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\Censored_Data_EX2.PNG){width=50%}
+
+
+</center>
+
+
+An example of a situation could be for virus testing. For instance, if we’ve been following an individual and recorded an event when for instance the individual tests positive for a virus but we don’t know the exact time of when the individual was exposed to the disease. We only know that there was some exposure between 0 and the time they were tested.
+
+
+*   3) Interval-censored data
+
+Survival analysis data can also be interval-censored, which can occur if a subject’s true (but unobserved) survival time is within a certain known specified time interval.
+
+<center>
+
+![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\Censored_Data_EX3.PNG){width=50%}
+
+
+</center>
+
+Using the virus testing example, if we have the situation whether we’ve performed testing on the indvidual at some timepoint $t_{(1)}$ and the individual was negative. But then at a timepoint further on $t_{(2)}$, the individual tested positive:
+
+In this scenario, we know the individual was exposed to the virus sometime between t1 and t2, but we do not know the exact timing of the exposure.
+
+<p>&nbsp;</p>
+
+
+#### Some definitions...
+
+
+*   **survival time**: time until an event occurs. For example: time that an individual has “survived” over some follow-up period 
+*   **survival probability**: conditional probability of surviving beyond a time, given that an individual has survived just prior to that time.
+*   **failure**: event of interest usually is death, disease incidence, or some other negative individual
+experience.  
+*   **censoring**: occurs if a subject has not experienced the event of interest by the end of the data collection. It is a type of missing data problem unique to survival analysis. We don’t know the survival time exactly because the study ends, a person is lost to follow-up or withdraws from the study...
+*   **right-censored**: true survival time is equal to or greater than observed survival time  
+*   **left-censored**: true survival time is less than or equal to the observed survival time  
+*   **interval-censored**: true survival time is within a known time interval 
+
+
+Terminology: time = survival time; event = failure. We have two possible outcomes/status: event/failure (1) and censored (0).
+
+
+<p>&nbsp;</p>
+
+
+
+#### Notations
+
+
+ *    **T**: random variable for a person’s survival time (T $\geq$ 0)
+
+ *    **t**: specific of interest for the variable T
+
+ *    **d**: (0, 1) random variable, 1 if failure  if the event occurs during the study period, 0 censored
+
+ *    **S(t) = P(T $>$ t)**: survival function, "probability that a person survives longer than some specified time t". NB: S(0) = 1, S($\infty$) = 0, S decreasing.
+    
+  Theoretically, as t ranges from 0 up to infinity, the survivor function is graphed as a decreasing smooth curve, which begins at S(t) = 1 at t = 0 and heads downward toward zero as t increases toward infinity. In practice, using data, we usually obtain estimated survivor curves that are step functions, as illustrated here, rather than smooth curves.
+
+<center>
+
+ ![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\Survival_Curves.PNG)
+ 
+</center>
+
+ *    **h(t) = $\lim\limits_{\Delta t\to 0} \frac{P(t\leq T < t + \Delta t | T \geq t )}{\Delta t}$**: hazard function, "potential of failure in an infinitesimally small time period between t and t + $\Delta t$ given that the subject has survived up till time t = P(individual fails in the interval [t, t + $\Delta t$ | survival up to time t). In other words, the hazard function h(t) gives the instantaneous potential per unit time for the event to occur, given that the individual has survived up to time t. Note: not a density or a probability. always positive with no upper bound
+
+<p>&nbsp;</p>
+
+Regardless of which function S(t) or h(t) one prefers, there is a clearly defined relationship between the two. In fact, if one knows the form of S(t), one can derive the corresponding h(t), and vice versa: 
+
+S(t) = $exp[ - \int_{0}^{1} h(u) du]$ and h(t) = $- [\frac{dS(t)/dt}{S(t)}]$
+
+
+The hazard rate indicates failure potential rather than survival probability. Thus, the higher the average hazard rate, the lower is the group’s probability of surviving.
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+#### Basic Data Layout for computer
+
+<p>&nbsp;</p>
+
+This layout helps provide some understanding of how a survival analysis actually works and, in particular, how survivor curves are derived.
+
+<p>&nbsp;</p>
+
+
+<center>
+
+
+![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\Basic_Data_Layout.PNG)
+
+</center>
+
+
+
+The first column in the table gives ordered survival times from smallest to largest. These are denoted by t’s with subscripts within parentheses, starting with $t_{(0)}$, then $t_{(1)}$ and so on, up to $t_{(k)}$ where k is the number of distinct times at which subjects failed ($k \leq n$).
+
+The second column gives frequency counts, denoted by $m_f$, of failures at each distinct failure time. 
+
+
+The third column gives frequency counts, denoted by $q_f$, of those persons censored in the time interval starting with failure time $t_{(f)}$ up to the next failure time denoted $t_{(f+1)}$. Technically, because of the way we have defined this interval in the table, we include those persons censored at the beginning of the interval. 
+
+The last column gives the risk set, $R(t_{(f)})$, which denotes the collection of individuals who have survived at least to time $t_{(f)}$.
+
+Let's look at an example of data derived from a study of the remission times in weeks for two groups of leukemia patients, with 21 patients in each group. Group 1 is the treatment group and group 2 is the placebo group. The basic question of interest concerns comparing the survival experience of the two groups.
+
+<center>
+
+![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\Basic_Data_Layout_EX1.PNG){width=25%}
+
+</center>
+
+For example, using the remission data for group 1, we find that 9 of the 21 persons failed, including 3 persons at 6 weeks and 1 person each at 7, 10, 13, 16, 22, and 23 weeks. These nine *failures* have $k = 7$ distinct survival times, because three persons had survival time 6 and we only count one of these 6’s as distinct. The first ordered failure time for this group, denoted as $t_{(1)}$, is 6; the second ordered failure time $t_{(2)}$, is 7, and so on up to the seventh ordered failure time of 23.
+
+
+The *censored data* includes 5 nonzero $q$’s: $q_1 = 1$, $q_2 = 1$, $q_3 = 2$, $q_5 = 3$, $q_7 = 5$. Adding these values gives us the total number of censored observations for group 1, which is 12. Moreover, if we add the total number of $q$’s (12) to the total number of m’s (9), we get the total number of subjects in
+group 1, which is 21.
+
+For the *risk set*, we see that at the start of the study everyone in group 1 survived at least 0 weeks, so the risk set at time 0 consists of the entire group of 21 persons. The risk set at 6 weeks for group 1 also consists of all 21 persons, because all 21 persons survived at least as long as 6 weeks. These 21 persons include the 3 persons who failed at 6 weeks, because they survived and were still at risk just up to this point.
+
+
+Now let’s look at the risk set at 7 weeks. This set consists of 17 persons in group 1 that survived at least 7 weeks. We omit everyone in the X-ed area. Of the original 21 persons, we therefore have excluded the three persons who failed at
+6 weeks and the one person who was censored at 6 weeks. These four persons did not survive at least 7 weeks. Although the censored person may have survived longer than 7 weeks, we must exclude him or her from the risk set at 7 weeks because we have information on this person only up to 6 weeks.
+
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+## The Lung dataset
+
+
+We use the **lung dataset** available from the survival package survival. The data contain subjects with advanced lung cancer from the North Central Cancer Treatment Group. It includes the 10 following variables:
+
+*   inst:	$\qquad$ Institution code
+
+*   time: $\qquad$	Survival time in days
+
+*   status:	$\qquad$ censoring status 1=censored, 2=dead
+
+*   age:	$\qquad$ Age in years
+
+*   sex:	$\qquad$ Male=1 Female=2
+
+*   ph.ecog:	$\qquad$ ECOG performance score as rated by the physician. 0=asymptomatic, 1= symptomatic but completely ambulatory, 2= in bed <50% of the day, 3= in bed > 50% of the day but not bedbound, 4 = bedbound
+
+*   ph.karno:	$\qquad$ Karnofsky performance score (bad=0-good=100) rated by physician
+
+*   pat.karno:	$\qquad$ Karnofsky performance score (0 = bad,  100 = good) as rated by patient
+
+*   meal.cal:	$\qquad$ Calories consumed at meals
+
+*   wt.loss:	$\qquad$ Weight loss in last six months
+
+
+<p>&nbsp;</p>
+
+```{r}
+data(lung)
+
+head(lung, n=10) %>%
+  kbl() %>%
+  kable_styling()
+```
+
+```{r, message=F, warning=F}
+data(lung)
+t(introduce(lung))
+plot_intro(lung)
+```
+
+We have 2280 observations. All the variables are treated as continuous. Therefore, we transform the variable sex into a factor. We can also see that only 167/228 = 73% of the rows are complete
+
+```{r, message=F, warning=F}
+# re-code sex and status
+lung <- lung %>% 
+            mutate(sex=factor(sex, levels=c(1,2), labels=c("M", "F")),
+                   had_event=ifelse(status==1, 0, 1))
+```
+
+
+<p>&nbsp;</p>
+
+
+#### Missing values
+
+
+```{r, message=F, warning=F}
+plot_missing(lung, group=c("Good"=1.0), theme_config=list(text = element_text(size = 16)))
+```
+
+The missing values are predominantly in meal.cal and wt.loss.
+
+
+<p>&nbsp;</p>
+
+#### Count of unique values per column
+
+
+```{r, message=F, warning=F}
+lung %>% 
+    mutate(sex=as.numeric(sex)) %>%
+    pivot_longer(cols=colnames(lung)) %>% 
+    group_by(name) %>% 
+    summarize(unique_values=n_distinct(value))
+```
+
+
+<p>&nbsp;</p>
+
+
+#### Data desciption
+
+
+```{r, message=F, warning=F}
+descr(lung, transpose=TRUE, stats=c("min", "med", "mean", "max", "q1", "q3", "sd"))
+```
+
+```{r, message=F, warning=F}
+tmp = lung %>% 
+        select(age, meal.cal, pat.karno, ph.karno, time, wt.loss) %>% 
+        pivot_longer(everything())
+ggplot(tmp, aes(x=value)) + 
+  geom_histogram(aes(y=..density..), alpha=0.5) + 
+  geom_density() + 
+  facet_wrap(. ~ name, scales="free") +
+  theme(text = element_text(size=20))
+```
+
+```{r, message=F, warning=F}
+# compare censored and uncensored observations
+tmp = lung %>% 
+        select(had_event, age, meal.cal, pat.karno, ph.karno, time, wt.loss) %>% 
+        pivot_longer(-one_of("had_event")) %>%
+        mutate(had_event=ifelse(had_event==0,"Censored", "Died"))
+ggplot(tmp, aes(x=value)) + 
+  geom_density(aes(color=had_event)) + 
+  facet_wrap(. ~ name, scales="free") +
+  theme(text = element_text(size=20),
+        legend.title = element_blank(),
+        legend.position = "top")
+```
+
+
+```{r, message=F, warning=F}
+# bar charts of discrete features
+plot_bar(lung %>% 
+           select(ph.ecog, sex, had_event) %>%
+           mutate(ph.ecog=factor(ph.ecog, 
+                                 levels=c(0, 1, 2, 3, 4), 
+                                 labels=c("0-asymptomatic", "1-symptomatic", "2-in bed <50%", "3-in bed >50%", "4-bedbound"))), 
+         theme_config=list(text = element_text(size = 20)), 
+         order_bar=FALSE)
+```
+
+```{r, message=F, warning=F}
+# compare censored and uncensored observations
+tmp = lung %>% 
+        select(had_event, sex, ph.ecog) %>% 
+        mutate(had_event=ifelse(had_event==0,"Censored", "Died"),
+               ph.ecog=factor(ph.ecog)) %>%
+        pivot_longer(-one_of("had_event")) %>%
+        group_by(had_event, name, value) %>%
+        summarise(count=n())
+        
+
+ggplot(tmp, aes(x=value, y=count)) + 
+  geom_bar(aes(fill=had_event), position="dodge", stat="identity") + 
+  facet_wrap(. ~ name, scales="free") +
+  theme(text = element_text(size=20),
+        legend.title = element_blank(),
+        legend.position = "top")
+```
+
+
+*   Average time-to-event/censor: 363 days: censored subjects, 283 days: dead subjects, right-skewed
+
+*   72% of individuals in the study died
+*   61% male, 39% female
+*   Age is left-skewed; median = 63
+*   Weight loss in the last 6 months with Median = 7 pounds, IQR is 0 to 16 pounds.
+*   Performance scores at study start were good: The IQR of the Karnosky scores were 70-90, between “able to live at home” and “normal activity”). Most subjects had an ECOG score between “asymptomatic” and “symptomatic but ambulatory
+
+
+<p>&nbsp;</p>
+
+#### Outlier summary
+
+
+```{r, message=F, warning=F}
+outlier_summary = diagnose_outlier(lung) %>% filter(outliers_cnt > 0)
+outlier_var_iqr = data.frame(t(apply(lung[, outlier_summary$variables], 2, quantile, c(0.25, 0.75), na.rm=TRUE)))
+outlier_var_iqr %>%
+  rename(Q25="X25.", Q75="X75.") %>%
+  rownames_to_column("variables") %>%
+  left_join(outlier_summary, by="variables") %>%
+  select(variables, Q25, Q75, outliers_mean, outliers_cnt, with_mean, without_mean) %>%
+  mutate(across(where(is.numeric), round, 2))
+```
+
+
+```{r, message=F, warning=F}
+# use dlookr to examine outliers
+plot_outlier(lung,
+             diagnose_outlier(lung) %>%
+                filter(outliers_cnt > 0) %>%
+                select(variables) %>%
+                unlist())
+```
+
+
+```{r, message=F, warning=F}
+box_data <- lung %>% 
+              select(outlier_summary$variables) %>% 
+              pivot_longer(everything()) %>% 
+              drop_na()
+ggplot(box_data, aes(x=value)) + 
+  geom_boxplot() + 
+  facet_wrap(.~name, scales="free") +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_blank(),
+        text = element_text(size=20))
+```
+
+*   5 individuals’ calories at meals average 2,410 calories/meal, compared to an average overall of 929 calories/meal.
+*   Some subjects lost more than 50 pounds in the last 6 months; 1 individual had gained weight.
+*   Outliers in time-to-event survived, on average, 871 days, as compared to 305 days on average across all subjects
+
+
+<p>&nbsp;</p>
+
+
+#### Normality distribution of each variables
+
+
+```{r, message=F, warning=F}
+normality(lung)
+plot_normality(lung)
+```
+
+We examine normality, but our variables are all skewed.
+
+
+<p>&nbsp;</p>
+
+
+#### Correlations
+
+
+
+```{r, message=F, warning=F}
+# dlookr: correlation heatmap
+data_for_cor <- lung %>% 
+                  select(age, ph.ecog, ph.karno, pat.karno, meal.cal, wt.loss, time) %>% 
+                  replace(is.na(.), 0)
+
+corrs = cor(data_for_cor)
+corrplot(corrs, type="upper", method="color", addCoef.col = "black")
+```
+
+
+*   We can observe a strong correlation between ph.ecog and ph.karno, and the correlation between ph.ecog and pat.karno. 
+*   The age is associated with worse performance scores, lower meal calories, more weight loss, and shorter time-to-event. 
+*   Good performance scores are associated with more calories at meals, less weight loss, and longer times-to-event
+
+
+<p>&nbsp;</p>
+
+
+#### Time effects
+
+
+```{r, message=F, warning=F}
+scattervars <- c("inst", "time", "age", "ph.ecog", "ph.karno", "pat.karno", "meal.cal", "wt.loss")
+time_df <- lung %>% 
+                select(all_of(scattervars)) %>%
+                pivot_longer(cols=-time, names_to="variable")
+
+ggplot(time_df, aes(x=time, y=value)) +
+    geom_jitter() +
+    facet_wrap(vars(variable), nrow=2, scales="free")
+
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+## Survival object
+
+
+
+'Surv' is the main function used to create the survival object, usually used as a response variable in a model formula. It takes as an input the time and event.
+
+```{r}
+Surv(lung$time, lung$status)[1:10]
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+
+## Kaplan-Meier model
+
+
+<p>&nbsp;</p>
+
+#### Kaplan-Meier General model
+
+The Kaplan-Meier method is the most common way to estimate survival times and probabilities. It is a **non-parametric** approach that results in a step function, where there is a step down each time an event occurs.
+
+The remaining survival probabilities are computed such that we count the number of subjects surviving past the specified time being considered and divide by the number of subjects at the start of follow-up.
+
+$$\hat{S}(t_{f}) = \hat{S}(t_{f-1}) \hat{P}r(T \geq t_{(f)} | T \geq t_{(f)} ) = \prod_{i=1}^{f} \hat{P}r(T \geq t_{(i)} | T \geq t_{(i)} )$$
+
+This formula gives the probability of surviving past the previous failure time $t_{f-1}$, multiplied by the conditional probability of surviving past time $t_{f}$, given survival to at least time $t_{f}$. Each term in the product is the probability of exceeding a specific ordered failure time $t_{f}$ given that a subject survives up to that failure time. 
+
+
+<p>&nbsp;</p>
+
+
+
+#### Example
+
+
+Looking at the previous example, we can calculate  the survival time from the Kaplan-Meier model.
+
+<center>
+
+![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\Kaplan_Meier_EX.PNG){width=25%}
+
+</center>
+
+
+The first survival estimate on the list is $\hat{S}(0) = 1$, as it will always be, because this gives the probability of surviving past time zero.
+
+
+The other survival estimates are calculated by multiplying the estimate for the immediately preceding failure time by a fraction. For example, the fraction is 18/21 for surviving past week 6, because 21 subjects remain up to week 6 and 3 of these subjects fail to survive past week 6. The fraction is 16/17 for surviving past week 7, because 17 people remain up to week 7 and 1 of these fails to survive past week 7. The other fractions are calculated similarly.
+
+
+<p>&nbsp;</p>
+
+#### Compute the Kaplan-Meier model
+
+
+With the survfit() function, we create a simple survival curve that doesn’t consider any different groupings, so we’ll specify just an intercept (e.g., ~1) in the formula that survfit expects.
+
+
+```{r}
+fit_overall = survfit(Surv(time, event=had_event) ~ 1, data=lung)
+print(fit_overall)
+```
+
+By default, the function print() shows a short summary of the survival curves. It prints the number of observations, number of events, the median survival and the confidence limits for the median. We can note that the median survival time is 310 days.
+
+The function survfit() returns a list of variables, including the following components:
+
+*   n: total number of subjects in each curve.
+*   time: the time points on the curve.
+*   n.risk: the number of subjects at risk at time t
+*   n.event: the number of events that occurred at time t.
+*   n.censor: the number of censored subjects, who exit the risk set, without an event, at time t.
+*   lower,upper: lower and upper confidence limits for the curve, respectively.
+
+```{r}
+# creates the survival table 
+f <- summary(fit_overall)
+df_overall_fit <- data.frame(f$time, f$n.risk, f$n.event, f$n.censor, f$surv, f$lower, f$upper)
+names(df_overall_fit) <- c("time", "n.risk", "n.event", "n.censor", "survival", "ci_95_lower", "ci_95_upper")
+head(df_overall_fit, n=10)
+```
+
+We use the function ggsurvplot() [in Survminer R package] to produce the survival curves for the two groups of subjects.
+
+```{r}
+ggsurvplot(fit_overall, 
+            xlab="Days", 
+            ylab="Overall survival probability",
+            risk.table=TRUE,
+            conf.int=TRUE,
+            surv.median.line="hv")  # draw horizontal AND vertical line for median
+```
+
+
+<p>&nbsp;</p>
+
+#### Using Variables: Kaplan Meier model with sex 
+
+we model something besides just an intercept. Let’s fit survival curves separately by sex.
+
+
+```{r}
+# visualize (KM plot) effect of sex
+
+# median survival time for men = 270 days, vs. 426 days for women
+km_sex = survfit(Surv(time, event=had_event) ~ strata(sex), data=lung)
+print(km_sex)
+
+ggsurvplot(survfit(Surv(time, event=had_event) ~ sex, data=lung), # survival model
+           xlab="Days", 
+           ylab="Overall survival probability",
+           pval = TRUE, # displays p-value of log-rank test of the difference between the two curves
+           risk.table=TRUE,
+           conf.int=TRUE,  # plots a confidence interval for each curve
+           surv.median.line="hv")
+```
+
+```{r}
+ggsurvplot(
+  survfit(Surv(time, event=had_event) ~ sex, data=lung),                     #survival model we want to plot 
+  pval = TRUE,              #displays p-value of log-rank test, if p-value < 0.05, then the difference between the two curves are statistically significant
+  conf.int = TRUE,          #plots a confidence interval for each curve
+  xlab = "Time in days",
+  break.time.by = 150,      # break X axis in time intervals by 100.
+  ggtheme = theme_light(),  # customize theme with a grid for better readability 
+  risk.table = "abs_pct",   # absolute number and percentage at risk
+  risk.table.y.text.col = T,# colour risk table text annotations
+  risk.table.y.text = FALSE,# show bars instead of names in text annotations
+                            # in legend of risk table.
+  ncensor.plot = TRUE,      # plot the number of censored subjects at time t
+  surv.median.line = "hv",   # add the median survival pointer
+  legend.labs=c("Male", "Female"), legend.title="Sex",  
+  palette=c("dodgerblue2", "orchid2"), 
+  title="Kaplan-Meier Curve for Lung Cancer Survival by sex", 
+  risk.table.height=.15
+)
+```
+
+
+<p>&nbsp;</p>
+
+#### Comparing Survival Curves
+
+
+<p>&nbsp;</p>
+
+The **log-rank** test can be used to evaluate whether or not KM curves for two or more groups are statistically equivalent. The null hypothesis is that there is no difference in survival between the groups. 
+
+The log rank test is a **non-parametric test**, which makes no assumptions about the survival distributions. It is approximately distributed as a chi-square test statistic.
+
+
+<p>&nbsp;</p>
+
+We consider the previous example.
+
+<center>
+
+![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\Log_RankEX.PNG){width=25%}
+
+</center>
+
+
+<p>&nbsp;</p>
+ 
+We have:
+*   $m_{if}$ = observed counts in group i at time f
+*   $e_^{if}$ = expected counts in group i at time f
+
+
+For two-group case, the log–rank test statistic is formed using the sum of the observed minus expected counts over all failure times for one of the groups:
+
+$$X^{2} = \frac{(O_{i} - E_{i})^{2}}{V(O_{i} - E_{i})}  \sim  \chi^{2}$$
+
+
+where: $\#$ of failure times for the group i is $O_{i} - E_{i} = \sum_{f=1}^{27} (m_{if} - e_{if})$ and $e_1 = (\frac{n_{1f}}{n_{1f} + n_{2f}}) x (m_{1f} + m_{2f})$, $e_2 = (\frac{n_{2f}}{n_{1f} + n_{2f}}) x (m_{1f} + m_{2f})$.
+
+
+Therefore, we have $O_{1} - E_{1} = -10.26$ and $O_{2} - E_{2} = 10.26$. 
+
+For two groups, the variance formula is the same for each group:
+
+$$V(O_{i} - E_{i}) = \sum_j \frac{n_{1f}n_{2f}(m_{1f} + m_{2f})(n_{1f} + n_{2f} - m_{1f} - m_{2f})}{(n_{1f} + n_{2f})(n_{1f} + n_{2f} - 1)}$$
+We will use the group 2 value to carry out the test, but as we can see, except for the minus sign, the difference is the same for the two groups.
+
+
+Therefore, the estimated variance of O2 - E2 is computed
+from the variance formula above to be 6.2685. The log–rank statistic then is obtained by squaring 10.26 and dividing by 6.285, which yields 16.793, as shown on the computer printout.
+
+$$X^{2} = \frac{(O_{i} - E_{i})^{2}}{\hat{V}(O_{i} - E_{i})}  = \frac{(10.26)^2}{ 6.2685} = 16.793$$.
+
+
+<p>&nbsp;</p>
+
+The null hypothesis being tested is that there is no overall difference between the two survival curves. Under this null hypothesis, the log-rank statistic is approximately chi-square with one degree of freedom. Thus, a P-value for the log–rank test is determined from tables of the chi-square distribution.
+
+
+
+<p>&nbsp;</p>
+
+
+An approximation to the log–rank statistic, shown here, can be calculated using observed and expected values for each group without having to compute the variance formula.
+
+$$X^{2} = \sum_{i}^{\# of groups} \frac{(O_{i} - E_{i})^{2}}{E_{i}}$$
+
+In our case, we have:
+
+$$X^{2} = \frac{(-10.26)^2}{ 19.26} + \frac{(10.26)^2}{ 10.74} = 15.276$$
+
+The calculation of the approximate formula is shown here for the remission data. The expected values are 19.26 and 10.74 for groups 1 and 2, respectively. The chi-square value obtained is 15.276, which is slightly smaller than the log–rank statistic of 16.793.
+
+
+Although the same tabular layout can be used to carry out the calculations when there are more than two groups, the test statistic is more complicated mathematically, involving both ariances and covariances of summed observed minus expected scores for each group. 
+
+
+<p>&nbsp;</p>
+
+The function survdiff() [in survival package] can be used to compute log-rank test comparing males and females survival curves.
+
+```{r}
+survdiff(Surv(time, had_event) ~ sex, lung)
+```
+
+The log rank test for difference in survival gives a p-value of p = 0.001, indicating that the sex groups differ significantly in survival.
+
+
+There are several alternatives to the log rank test  designed to test the hypothesis that two or more survival curves are equivalent called the Wilcoxon, the Tarone-Ware, the Peto, and the Flemington-Harrington test. These test statistics are variations of the log rank test statistic and are derived by applying different weights at the f-th failure time (as shown on the left for two groups).
+
+
+<p>&nbsp;</p>
+
+
+#### Transforming the survival curve
+
+
+<p>&nbsp;</p>
+
+There is another major argument of the ggsurvplot() function, “fun”, which proposes alternative transformations:
+
+
+<p>&nbsp;</p>
+
+1- “log”: log transformation of the survivor function
+
+```{r}
+ggsurvplot(survfit(Surv(time, event=had_event) ~ sex, data=lung),
+          conf.int = TRUE,
+          ggtheme = theme_bw(), 
+          fun = "log")
+```
+
+
+<p>&nbsp;</p>
+
+2- “event”: plots cumulative events (f(y) = 1-y). It’s also known as the cumulative incidence.
+
+
+```{r}
+ggsurvplot(survfit(Surv(time, event=had_event) ~ sex, data=lung),
+          conf.int = TRUE,
+          ggtheme = theme_bw(), 
+          fun = "event")
+```
+
+
+<p>&nbsp;</p>
+
+3- "cumhaz” plots the cumulative hazard function (f(y) = -log(y))
+
+ The cumulative hazard (H(t)) can be interpreted as the cumulative force of mortality. In other words, it corresponds to the number of events that would be expected for each individual by time t if the event were a repeatable process.
+ 
+```{r}
+ggsurvplot(survfit(Surv(time, event=had_event) ~ sex, data=lung),
+          conf.int = TRUE,
+          ggtheme = theme_bw(), 
+          fun = "cumhaz")
+```
+
+
+<p>&nbsp;</p>
+
+## Conditional survival curves
+
+<p>&nbsp;</p>
+
+It can be useful to generate survival estimates among a group of patients who have already survived for some length of time.
+
+$$S(y|x) = \frac{S(x + y)}{S(x)}$$
+where:
+
+*   y: number of additional survival years of interest
+*   x: number of years a patient has already survived
+
+
+We can compute the conditional survival estimates with the package condsurv and generate estimates and plots related to conditional survival.
+
+We can use the conditional_surv_est function to get estimates and 95% confidence intervals. Let’s condition on survival to 6-months.
+
+```{r}
+fit_overall = survfit(Surv(time, event=had_event) ~ 1, data=lung)
+surv_times <- c(0, 0.5*365, 365, 1.5*365, 2*365)
+
+gg_conditional_surv(
+  basekm = fit_overall,  # intercept-only model 
+  at = surv_times,
+  main = "Conditional survival in lung data",
+  xlab = "Days"
+  ) +
+  labs(color = "Conditional time")
+```
+The resulting plot has one survival curve for each time on which we condition. In this case the first line is the overall survival curve since it is conditioning on time 0.
+
+```{r}
+conditional_surv_est(fit_overall, t1=0, t2=2*365)
+surv_times <- c(0.25*365, 0.5*365, 365, 1.5*365, 2*365)
+
+# unconditional survival probabilities (at 3/6/12/18/24 months)
+purrr::map_df(
+  surv_times, 
+  ~conditional_surv_est(
+    basekm = fit_overall, 
+    t1 = 0, 
+    t2 = .x) 
+  ) %>% 
+  mutate(months = round(surv_times / 30.4)) %>% 
+  select(months, everything())
+
+# 3-month conditional survival probabilities (at 6/12/18/24 months)
+purrr::map_df(
+  surv_times[-1], 
+  ~conditional_surv_est(
+    basekm = fit_overall, 
+    t1 = 0.25*365, 
+    t2 = .x) 
+  ) %>% 
+  mutate(months = round(surv_times[-1] / 30.4)) %>% 
+  select(months, everything())
+
+# 6-month conditional survival probabilities (at 12/18/24 months)
+purrr::map_df(
+  surv_times[-1:-2], 
+  ~conditional_surv_est(
+    basekm = fit_overall, 
+    t1 = 0.5*365, 
+    t2 = .x) 
+  ) %>% 
+  mutate(months = round(surv_times[-1:-2] / 30.4)) %>% 
+  select(months, everything())
+
+# 12-month survival probabilities (at 18/24 months)
+purrr::map_df(
+  surv_times[-1:-3], 
+  ~conditional_surv_est(
+    basekm = fit_overall, 
+    t1 = 365, 
+    t2 = .x) 
+  ) %>% 
+  mutate(months = round(surv_times[-1:-3] / 30.4)) %>% 
+  select(months, everything())
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+## Cox PH model
+
+
+<p>&nbsp;</p>
+
+Kaplan-Meier curves are good for visualizing differences in survival between two categorical groups, and the log-rank test you get when you ask for pval=TRUE is useful for asking if there are differences in survival between different groups. But this doesn’t generalize well for assessing the effect of quantitative variables.
+
+Another method, called Cox PH regression, can assess the effect of both categorical and continuous variables, and can model the effect of multiple variables at once. 
+
+
+<p>&nbsp;</p>
+
+### Cox PH General model
+
+
+<p>&nbsp;</p>
+
+
+The Cox model is expressed by the **hazard function** denoted by $h(t)$. It is a **semi-parametric** model that can be used to fit univariable and multivariable regression models that have survival outcomes. The hazard function can be interpreted as the risk of dying at time t. It can be estimated as follow:
+
+$h(t, X_{i}) = h_{0}(t)e^{ \sum_{j=1}^{p} \beta_{j}X_{i,j}} = h_{0}(t)exp(\beta_{1}X_{i,1} + ... +\ beta_{p}X_{i,p})$
+
+where:
+
+*   $h(t)$ is the hazard, the instantaneous rate at which events occur. 
+*   $h_{0}(t)$ is called the **baseline hazards** (when all X's are equal to 0), depends on $t$
+*   $X = (X_{1}, X_{2},..., X_{p})$ explanatory/predictor variables
+*   $e^{ \sum_{i=1}^{p} \beta_{i}X_{i}}$, depends only on X's, called \textbf{time-independent}.
+
+Because the **baseline hazard** $h_{0}(t)$ is an unspecified function, the Cox model us a **semiparametric model**.
+
+Advantages of the model: “robust” model, so that the results from using the Cox model will closely approximate the results for the correct parametric model.
+
+
+
+<p>&nbsp;</p>
+
+
+The Cox model can be written as a multiple linear regression of the logarithm of the hazard on the variables $X_{i}$, with the baseline hazard, $h_{0}(t)$, being an ‘intercept’ term that varies with time. 
+
+
+$$log(h(t, X_{i})) = log(h_{0}(t)) + \sum_{j=1}^{p} \beta_{j}X_{i,j}$$
+
+We can compute the hazard ratio, which is the ratio of hazards between two groups at any particular point in time: "hazard for one individual divided by the hazard for a different individual".
+
+
+$$\hat{HR} = \frac{\hat{h}(t, X^{*})}{\hat{h}(t, X)} = e^{ \sum_{i=1}^{p} \beta_{i} (X^{*}_{i} - X_{i})}$$
+
+
+with:
+
+X$^{*}$:  set of predictors for one individual
+
+X: set of predictors for the other individual
+
+
+<p>&nbsp;</p>
+
+
+This model shows that the hazard ratio is $e^{ \sum_{i=1}^{p} \beta_{i} (X^{*}_{i} - X_{i})}$, and remains constant over time t (hence the name proportional hazards regression). In this sense, we do not need the baseline hazard because we can interpret coefficients as hazard ratios.
+
+
+<p>&nbsp;</p>
+
+A hazard ratio above 1 indicates a covariate that is positively associated with the event probability, and thus negatively associated with the length of survival.
+
+
+<p>&nbsp;</p>
+
+In summary,
+
+*   HR=1 : No effect
+*   HR<1: Reduction in the hazard
+*   HR>1: Increase in Hazard
+
+
+<p>&nbsp;</p>
+
+
+As a note, in cancer studies, a covariate with hazard ratio :
+
+*   greater  than 1 (i.e.: b>0) is called bad prognostic factor.
+*   smaller than  1 (i.e.: b<0) is called good prognostic factor.
+
+
+<p>&nbsp;</p>
+
+As a consequence, a major assumption of this model is that the HR is constant over time because it is independent of time. Or equivalently that the hazard for one individual is proportional to the hazard for any other individual, where the proportionality constant is independent of time.
+
+
+<p>&nbsp;</p>
+
+
+It is possible, nevertheless, to consider X’s which do involve t. Such X’s are called time-dependent variables. If time-dependent variables are considered, the Cox model form may still be used, but such a model no longer satisfies the PH assumption, and is called the extended Cox model.
+
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+
+### Compute the Cox Model
+
+
+<p>&nbsp;</p>
+
+The coxph() function uses the same syntax as lm(), glm(), etc. The response variable you create with Surv() goes on the left hand side of the formula, specified with a ~. Explanatory variables go on the right side.
+
+
+<p>&nbsp;</p>
+
+#### 1) COX PH model with sex 
+
+
+<p>&nbsp;</p>
+
+```{r}
+cox_sex = coxph(Surv(time, had_event) ~ sex, data=lung)
+print(cox_sex)
+```
+
+
+The effect of sex is significantly related to survival (p-value = 0.00149), with better survival in females in comparison to males (hazard ratio of dying  = 0.588). 
+
+
+The model is statistically significant. That 0.00111 p-value of the model is really close to the p = 0.00131 p-value we saw on the Kaplan-Meier nodel as well as the likelihood ratio test = 10.63 is close to the log-rank chi-square (10.3) in the Kaplan-Meier model.
+
+
+$e^{\beta_{1}}$ = $e^{-0.531}$ = 0.5880 is the hazard ratio - the multiplicative effect of that variable on the hazard rate (for each unit increase in that variable). Females have 0.588 (~ 60%) times the hazard of dying in comparison to males. So, for a categorical variable like sex, going from male (baseline) to female results in approximately ~40% reduction in hazard.
+
+We could also flip the sign on the coef column, and take $e^{0.531}$ = 1/0.588 = 1.7, which we can interpret as being male resulting in a 1.7-fold increase in hazard, or that males die as approximately 1.7 x the rate per unit time as females (females die at 0.588x the rate per unit time as males).
+
+Recall:
+
+HR=1: No effect
+
+HR>1: Increase in hazard
+
+HR<1: Reduction in hazard (protective)
+
+
+<p>&nbsp;</p>
+
+
+We can directly calculate the log-rank test p-value using survdiff(). Cox regression and the logrank test from survdiff will to give you similar results most of the time. The log-rank test is asking if survival curves differ significantly between two groups. Cox regression is asking which of many categorical or continuous variables significantly affect survival.
+
+Recall:
+
+The log-rank test tests the following hypothesis:
+
+H0: There is no difference in the survival function when comparing males to females after adjusting for age.
+
+Ha: There is a difference in the survival function when comparing males to females after adjusting for age.
+
+```{r}
+survdiff(Surv(time, status)~sex, data=lung)
+```
+
+<p>&nbsp;</p>
+
+### Validity of the Cox PH model
+
+
+<p>&nbsp;</p>
+
+The Cox proportional hazards model makes several assumptions. We use residuals methods to:
+
+*   check the proportional hazards assumption with the Schoenfeld residuals 
+*   detect nonlinearity in relationship between the log hazard and the covariates using Martingale residual 
+*   examining influential observations (or outliers) with deviance residual (symmetric transformation of the martinguale residuals), to examine influential observations 
+
+
+<p>&nbsp;</p>
+
+
+#### Testing proportional hazard
+
+
+<p>&nbsp;</p>
+
+
+The proportional hazard assumption is supported by a non-significant relationship between residuals and time, and refuted by a significant relationship.
+
+We can test with the **Goodness of Fit (GOF)** approach based on the residuals defined by Schoenfeld.
+
+The idea behind the statistical test is that if the
+PH assumption holds for a particular covariate then the Schoenfeld residuals for that covariate will not be related to survival time.
+
+The implementation of the test can be thought of as a three-step process.
+
+*   Step 1. Run a Cox PH model and obtain Schoenfeld residuals for each predictor.
+
+*   Step 2. Create a variable that ranks the order of failures. The subject who has the first (earliest) event gets a value of 1, the next gets a value of 2, and so on.
+
+*   Step 3. Test the correlation between the variables created in the first and second steps. The null hypothesis is that the correlation between the Schoenfeld residuals and ranked failure time is zero.
+
+For each covariate, the function cox.zph() correlates the corresponding set of scaled Schoenfeld residuals with time, to test for independence between residuals and time. Additionally, it performs a global test for the model as a whole.
+
+
+```{r}
+test.ph <- cox.zph(cox_sex)
+print(test.ph)
+ggcoxzph(test.ph)
+```
+
+From the output above, the test is not statistically significant, and therefore the global test is also not statistically significant. Therefore, we can assume the proportional hazards.
+
+In the graphical diagnostic using the function ggcoxzph() [in the survminer package], the solid line is a smoothing spline fit to the plot, with the dashed lines representing a +/- 2-standard-error band around the fit. From the graphical inspection, there is no pattern with time. The assumption of proportional hazards appears to be supported for the covariates sex (which is, recall, a two-level factor, accounting for the two bands in the graph).
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+
+Another approach is to *graphically* check the PH assumption by comparing -log–log survival curves. A log–log survival curve is simply a transformation of an estimated survival curve that results from taking the natural log of an estimated survival probability twice.
+
+
+$h(t, X) = h_{0}(t)e^{ \sum_{j=1}^{p} \beta_{j}X_{j}}$ which is equivalent to $S(t,X) = [S_{0}(t)]^{e^{ \sum_{j=1}^{p} \beta_{j}X_{j}}}$
+
+Therefore, $$-ln(-ln(S(t, X)))$$
+
+
+$$= -ln(-ln([S_{0}(t)]^{e^{ \sum_{j=1}^{p} \beta_{j}X_{j}}}))$$
+$$= -ln[-ln(S_{0}(t))] - ln[e^{ \sum_{j=1}^{p} \beta_{j}X_{j}}]$$
+
+
+$$=  - \sum_{j=1}^{p} \beta_{j} X_{j} - ln[-ln(S_{0}(t))]$$
+
+Therefore, the corresponding log–log curves for these individuals are given as shown here, where we have simply substituted $X_1$ and $X_2$ for $X$ in the previous expression for the log–log curve for any individual $X$. 
+
+$$ln(-ln(S(t, X_1))) - ln(-ln(S(t, X_2)))$$
+$$= \sum_{j=1}^{p} \beta_{j} (X_{1j} - X_{2j})$$
+
+
+The baseline survival function has dropped out, so that the difference in log–log curves involves an expression that does not involve time t. The above formula says that if we use a Cox PH model and we plot the estimated -log–log survival curves for two groups of individuals on the same graph, the two plots would be approximately parallel.
+
+<p>&nbsp;</p>
+
+
+<center>
+
+
+![](C:\Users\flore\Documents\Fall 2020- Spring 2021\STAT696\Lung Dataset\ln(-ln(S(t))).PNG)
+
+</center>
+
+The distance between the two curves is the linear expression involving the differences in predictor values, which does not involve time. Note, in general, if the vertical distance between two curves is constant, then the curves are parallel.
+
+
+```{r}
+m = survfit(Surv(time, had_event) ~ sex, lung)
+s = summary(m)
+s_table = data.frame(s$strata, s$time, s$n.risk, s$n.event, s$n.censor, s$surv, s$lower, s$upper)
+s_table = s_table %>%
+              rename(strata=s.strata, time=s.time, surv=s.surv, lower=s.lower, upper=s.upper) %>%
+              mutate(negloglogsurv=-log(-log(surv)))
+```
+
+
+
+```{r}
+ggplot(s_table, aes(x=time, y=negloglogsurv, color=strata)) + 
+  geom_line(size=1.25) +
+  theme(text=element_text(size=16),
+        plot.title=element_text(hjust=0.5)) +
+  ylab("-ln(-ln(S(t)))") +
+  ggtitle("-log-log plot of survival time by sex")
+```
+
+<p>&nbsp;</p>
+
+The two curve do not cross, therefore this result suggests that the two groups in sex satisfy the PH assumption.
+
+
+<p>&nbsp;</p>
+
+#### Testing influential observations
+
+
+<p>&nbsp;</p>
+
+To test influential observations or outliers, we can visualize either: the dfbeta values or the deviance residuals.
+
+This plot produces the estimated changes in the coefficients divided by their standard errors. The comparison of the magnitudes of the largest dfbeta values to the regression coefficients suggests that none of the observations is terribly influential individually.
+
+
+```{r}
+ggcoxdiagnostics(cox_sex, type = "dfbeta",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+```
+
+It’s also possible to check outliers by visualizing the deviance residuals. The deviance residual is a normalized transform of the martingale residual. These residuals should be roughtly symmetrically distributed about zero with a standard deviation of 1.
+
+- Positive values correspond to individuals that “died too soon” compared to expected survival times.
+
+- Negative values correspond to individual that “lived too long”.
+
+- Very large or small values are outliers, which are poorly predicted by the model.
+
+```{r}
+ggcoxdiagnostics(cox_sex, type = "deviance",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+```
+
+The pattern looks fairly symmetric around 0 for the variable sex.
+
+
+We can then compare the survival curves from KM (km_sex) and Cox PH model (cox_sex).
+
+```{r}
+km_sex = survfit(Surv(time, event=had_event) ~ strata(sex), data=lung)
+km.curve <- getKMcurve(km = km_sex, 
+                       time.col = 'time', 
+                       event.col = 'had_event', 
+                       group.col = 'sex', 
+                       data = lung)
+km.curve = km.curve %>% 
+            select(group, Time, Survival) %>% 
+            rename(sex=group, time=Time, surv=Survival) %>%
+            mutate(sex=factor(sex, levels=c("M", "F")))
+            
+cox.curve = data.frame(sex=factor(lung$sex, levels=c("M", "F")),
+                       time=lung$time,
+                       surv=exp(-predict(cox_sex, type="expected")))
+ggplot() +
+  geom_line(data=km.curve, aes(x=time, y=surv, color=sex), size=0.25) +
+  geom_line(data=cox.curve, aes(x=time, y=surv, color=sex), size=1, linetype="dashed") +
+  ggtitle("Kaplan-Meier vs. Cox Model") +
+  ylab("Survival Probability") + 
+  theme(title=element_text(hjust=.5),
+        text=element_text(size=20))
+```
+
+
+<p>&nbsp;</p>
+
+#### 2) COX PH model with age 
+
+
+<p>&nbsp;</p>
+
+```{r}
+cox_age = coxph(Surv(time, had_event) ~ age, data=lung)
+print(cox_age)
+```
+
+The effect of age is significantly related to survival (p-value = 0.03946). $e^{\beta_{1}}$ = $e^{0.018720}$ = 1.018897 is the hazard ratio - the multiplicative effect of that variable on the hazard rate (for each unit increase of age). We have a better survival in younger people (hazard ratio of dying  = 1.018897). 
+
+
+```{r}
+test.ph <- cox.zph(cox_age)
+ggcoxzph(test.ph)
+ggcoxdiagnostics(cox_age, type = "dfbeta",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+ggcoxdiagnostics(cox_age, type = "deviance",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+ggcoxdiagnostics(cox_age, type = "martingale",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+```
+
+
+<p>&nbsp;</p>
+
+We do not observe any pattern in time, none of the observations is terribly influential individually.
+
+The last plot test the linearity by plotting the Martingale residuals against continuous covariates. THe age is slighty non-linear.
+
+
+<p>&nbsp;</p>
+
+#### Smooth survival plot - quantile of survival of age
+
+
+
+<p>&nbsp;</p>
+
+
+We want to visualize the survival estimate according to a continuous variable, age. The sm.survival function from the sm package allows to do this for a quantile of the distribution of survival data. The default quantile is p = 0.5 for median survival.
+
+The x’s represent events, the o’s represent censoring events and the line is a smoothed estimate of a qunatile survival according to age. 
+
+
+```{r}
+sm.options(
+  list(
+    xlab = "Age (years)",
+    ylab = "Time to death (years)")
+  )
+
+layout(matrix(c(1,2,3), ncol=3))
+
+#par(mar=c(5.1, 4.1, 4.1, 2.1))
+par(pty="s")  # make plot square
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = 1 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .5,
+  add=FALSE
+)
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = 1 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .25,
+  add=TRUE
+)
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = 1 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .75,
+  add=TRUE
+)
+
+title('1*h, quantiles .25, .5, .75')
+
+
+
+par(pty="s")  # make plot square
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .5 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .5,
+  add=FALSE
+)
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .5 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .25,
+  add=TRUE
+)
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .5 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .75,
+  add=TRUE
+)
+
+title('.5*h, quantiles .25, .5, .75')
+
+
+
+par(pty="s")  # make plot square
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .25 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .5,
+  add=FALSE
+)
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .25 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .25,
+  add=TRUE
+)
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .25 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .75,
+  add=TRUE
+)
+
+title('.25*h, quantiles .25, .5, .75')
+
+
+```
+
+
+
+```{r}
+sm.options(
+  list(
+    xlab = "Age (years)",
+    ylab = "Time to death (days)")
+  )
+
+#par(mar=c(5.1, 4.1, 4.1, 2.1))
+par(pty="s")  # make plot square
+
+par(pty="s")  # make plot square
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .5 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .5,
+  add=FALSE
+)
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .5 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .25,
+  add=TRUE
+)
+
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .5 * sd(lung$age) / nrow(lung)^(-1/4),
+  p = .75,
+  add=TRUE
+)
+
+title('Median survival by age, with IQR')
+
+```
+
+In this case, the line is  too smooth so we add the option h is the smoothing parameter. This should be related to the standard deviation of the continuous covariate, x. Suggested to start with $\frac{sd(x)}{n^{−1/4}}$ then reduce by 1/2, 1/4, etc to get a good amount of smoothing. The previous plot was too smooth so let’s reduce it by 1/4.
+
+```{r}
+sm.survival(
+  x = lung$age,
+  y = lung$time,
+  status = lung$status,
+  h = .25 * sd(lung$age) / nrow(lung)^(-1/4)
+  
+)
+```
+
+
+<p>&nbsp;</p>
+
+#### Transform age as a categorical variable
+
+
+<p>&nbsp;</p>
+
+We split the age variable into 4 categories: younger than 50, 51-60, 61-70, older than 70. 
+
+```{r}
+lung_cat = lung %>% 
+  mutate(age_grp = cut(lung$age, breaks=c(-Inf, 50, 60, 70, Inf), labels=c("<=50", "51-60", "61-70", ">70")))
+
+cox_age_cat = coxph(Surv(time, had_event) ~ age_grp, data=lung_cat)
+print(cox_age_cat)
+print(paste0("cox_age AIC = ", round(aic(cox_age), 1)))
+print(paste0("cox_age_cat AIC = ", round(aic(cox_age_cat), 1)))
+cox.zph(cox_age_cat)
+```
+The model is not signicant and neither of the variables are. We split the age in only two groups: younger than 70 and older than 70.
+
+```{r}
+lung_cat = lung %>% 
+  mutate(age_grp = cut(lung$age, breaks=c(-Inf, 69, Inf), labels=c("39-69", "70+")))
+
+cox_age_70 = coxph(Surv(time, had_event) ~ age_grp, data=lung_cat)
+print(cox_age_70)
+print(paste0("cox_age AIC = ", round(aic(cox_age), 1)))
+print(paste0("cox_age_70 AIC = ", round(aic(cox_age_70), 1)))
+cox.zph(cox_age_70)
+```
+The AIC is about the same as the model with a continuous variable. We test the proportional hazards assumption for age.
+
+```{r}
+m = survfit(Surv(time, had_event) ~ age_grp, lung_cat)
+s = summary(m)
+s_table = data.frame(s$strata, s$time, s$n.risk, s$n.event, s$n.censor, s$surv, s$lower, s$upper)
+s_table = s_table %>%
+              rename(strata=s.strata, time=s.time, surv=s.surv, lower=s.lower, upper=s.upper) %>%
+              mutate(negloglogsurv=-log(-log(surv)))
+```
+
+```{r}
+ggplot(s_table, aes(x=time, y=negloglogsurv, color=strata)) + 
+  geom_line(size=1.25) +
+  theme(text=element_text(size=16),
+        plot.title=element_text(hjust=0.5)) +
+  ylab("-log(-log(S(t)))") +
+  ggtitle("-log-log plot of survival time by age")
+```
+
+We can also look at the Kaplain-Meier curve with fir with the same variable.
+
+```{r}
+ggsurvplot(survfit(Surv(time, event=had_event) ~ age_grp, data=lung_cat), 
+           xlab="Days", 
+           ylab="Overall survival probability",
+           pval = TRUE,
+           risk.table=FALSE,
+           conf.int=TRUE,
+           surv.median.line="hv")
+```
+
+We can then compare the survival curves from KM (km_age) and Cox PH model (cox_age).
+
+```{r}
+km_age = survfit(Surv(time, event=had_event) ~ age_grp, data=lung_cat)
+km.curve <- getKMcurve(km = km_age, 
+                       time.col = 'time', 
+                       event.col = 'had_event', 
+                       group.col = 'age_grp', 
+                       data = lung_cat)
+km.curve = km.curve %>% 
+            select(group, Time, Survival) %>% 
+            rename(age_grp=group, time=Time, surv=Survival) %>%
+            mutate(age_grp=factor(age_grp, levels=c("39-69", "70+")))
+            
+cox.curve = data.frame(age_grp=factor(lung_cat$age_grp, levels=c("39-69", "70+")),
+                       time=lung_cat$time,
+                       surv=exp(-predict(cox_age, type="expected")))
+ggplot() +
+  geom_line(data=km.curve, aes(x=time, y=surv, color=age_grp), size=0.25) +
+  geom_line(data=cox.curve, aes(x=time, y=surv, color=age_grp), size=1, linetype="dashed") +
+  ggtitle("Kaplan-Meier vs. Cox Model") +
+  ylab("Survival Probability") + 
+  theme(title=element_text(hjust=.5),
+        text=element_text(size=20))
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+
+### Model selection with the cox PH model
+
+
+<p>&nbsp;</p>
+
+#### 1) Model with all variables
+
+
+<p>&nbsp;</p>
+
+```{r}
+mod1 = coxph(Surv(time, had_event) ~ age * sex + ph.ecog + ph.karno + pat.karno + meal.cal + wt.loss, data=lung)
+print(mod1)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+```
+
+We observe a significant effect of sex:age, ph.ecog, ph.karno, wt.loss. The hazard ratio is 6.9x larger for women than men. The signifcant variables are ph.ecog, ph.karno, wt.loss.
+
+We assess the proportional hazards assumption for our more complex model. Recall: if p < 0.05 (or other alpha), the assumption is violated.  
+```{r}
+cox.zph(mod1)
+```
+
+
+<p>&nbsp;</p>
+
+#### 2) Model without meal.cal
+
+
+<p>&nbsp;</p>
+
+We fit a model without meal.cal because it was the variable with the highest p-value in previous model and it violates the PH assumption.
+
+```{r}
+mod2 = coxph(Surv(time, had_event) ~ sex*age + ph.ecog + ph.karno + pat.karno + wt.loss, data=lung)
+print(mod2)
+print(paste0("mod2 AIC = ", round(aic(mod2), 1)))
+```
+
+All the variables are significant except sex. However, the AIC is much higher (worse) than the previous model including meal.cal.
+
+
+<p>&nbsp;</p>
+
+#### 3) Model with ECOG score, physician-rated Karnofsky score, and weight loss
+
+
+<p>&nbsp;</p>
+
+We build a model with only ECOG score (ph.ecog), physician-rated Karnofsky score (ph.karno), and weight loss (wt.loss), which were the only significant variables in first model (mod1) with all variables.
+
+```{r}
+mod3 = coxph(Surv(time, had_event) ~ ph.ecog + ph.karno + wt.loss, data=lung)
+print(mod3)
+print(paste0("mod3 AIC = ", round(aic(mod3), 1)))
+```
+
+The fit is significant, but only significant variable is ph.ecog. The AIC is much higher than the previous models as well.
+
+We refit the model with complete cases with ECOG score, physician-rated Karnofsky score, and weight loss, sex and age and their interaction, to compare against mod1 (the model with all variables).
+
+```{r}
+lung_subset = lung[complete.cases(lung[, c("sex", "age", "ph.ecog", "ph.karno", "pat.karno", "meal.cal", "wt.loss")]),]
+mod3b = coxph(Surv(time, had_event) ~ ph.ecog + ph.karno + wt.loss, data=lung_subset)
+print(mod3b)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3b AIC = ", round(aic(mod3b), 1)))
+anova(mod1, mod3b)
+```
+
+The comparison of mod1 and mod3b leads to the conclusion that mod1 fits the data significantly better than mod3b.
+
+We fit the same model adding back the variables age, sex and their interaction.
+```{r}
+mod3c = coxph(Surv(time, had_event) ~ age * sex + ph.ecog + ph.karno + wt.loss, data=lung)
+print(mod3c)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3 AIC = ", round(aic(mod3), 1)))
+print(paste0("mod3b AIC = ", round(aic(mod3b), 1)))
+print(paste0("mod3c AIC = ", round(aic(mod3c), 1)))
+```
+
+The model is statistically significant with a p-value equal to 2.572e-06.
+
+We refit the model with complete cases with age*sex, ECOG score, physician-rated Karnofsky score, and weight loss, sex and age and their interaction, to compare against mod1 (the model with all variables).
+
+```{r}
+lung_subset = lung[complete.cases(lung[, c("sex", "age", "ph.ecog", "ph.karno", "pat.karno", "meal.cal", "wt.loss")]),]
+mod3d = coxph(Surv(time, had_event) ~ age * sex + ph.ecog + ph.karno + wt.loss, data=lung_subset)
+summary(mod3d)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3d AIC = ", round(aic(mod3d), 1)))
+anova(mod1, mod3d)
+```
+
+The comparison of mod1 and mod3d leads to the conclusion that mod3d fits as well as the model with all the variables. Here we dropped meal.cal and pat.karno. The model mod3d is the best so far.
+
+
+<p>&nbsp;</p>
+
+#### 4) Model without ph.karno
+
+
+<p>&nbsp;</p>
+
+We fit a model without ph.karno because it is highly correlated with ph.ecog and with pat.karno. We include all the variables except ph.karno.
+
+```{r}
+mod4 = coxph(Surv(time, had_event) ~ age * sex + ph.ecog + pat.karno + meal.cal + wt.loss, data=lung)
+print(mod4)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3d AIC = ", round(aic(mod3d), 1)))
+print(paste0("mod4 AIC = ", round(aic(mod4), 1)))
+anova(mod1, mod4) 
+```
+
+The model is statistically sginificant and the AIC is close to the AICs of model 1 and model 3d. However, the anova suggests to keep ph.karno.
+
+We fit the same model without meal.cal.
+
+```{r}
+mod4b = coxph(Surv(time, had_event) ~ age * sex + ph.ecog + pat.karno + wt.loss, data=lung)
+print(mod4b)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3d AIC = ", round(aic(mod3d), 1)))
+print(paste0("mod4 AIC = ", round(aic(mod4), 1)))
+print(paste0("mod4b AIC = ", round(aic(mod4b), 1)))
+```
+
+The AIC is much higher (worse) suggesting to keep meal.cal.
+
+We refit the model with complete cases with ECOG score, patient-rated Karnofsky score, and weight loss, sex and age and their interaction, to compare against mod1 (the model with all variables).
+
+```{r}
+lung_subset = lung[complete.cases(lung[, c("sex", "age", "ph.ecog", "ph.karno", "pat.karno", "meal.cal", "wt.loss")]),]
+mod4c = coxph(Surv(time, had_event) ~ age * sex + ph.ecog + pat.karno + wt.loss, data=lung_subset)
+print(mod4c)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod4c AIC = ", round(aic(mod4c), 1)))
+anova(mod1, mod4c)
+```
+
+
+The AICs are equivalent meaning that this model is as significant as the first model with all the variables. Similarly, the anova has a high p-value indicating that the two models are significant.
+
+We therefore compare the model with ECOG score, patient-rated Karnofsky score, and weight loss, sex and age and their interaction vs ECOG score, physician-rated Karnofsky score, and weight loss, sex and age and their interaction.
+
+```{r}
+print(paste0("mod3d AIC = ", round(aic(mod3d), 1)))
+print(paste0("mod4c AIC = ", round(aic(mod4c), 1)))
+```
+
+The AICs are equivalent (<2) therefore any of the two models (mod3d or mod4c) can be used as the best model so far.
+
+
+<p>&nbsp;</p>
+
+#### 5) Model with ph.ecog modeled as categorical
+
+
+<p>&nbsp;</p>
+
+We fit a model with ph.ecog modeled as categorical.
+
+```{r}
+lung_cat = lung %>% mutate(ph.ecog = factor(ph.ecog))
+mod5 = coxph(Surv(time, had_event) ~ age * sex + ph.ecog + ph.karno + pat.karno + meal.cal + wt.loss, data=lung_cat)
+print(mod5)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3d AIC = ", round(aic(mod3d), 1)))
+print(paste0("mod4c AIC = ", round(aic(mod4c), 1)))
+print(paste0("mod5 AIC = ", round(aic(mod5), 1)))
+```
+
+The fit of the model is significant. However, the AIC is slightly higher. 
+
+We fit a model with meal.cal and ph.karno dropped and with ph.ecog modeled as categorical.
+```{r}
+mod5b = coxph(Surv(time, had_event) ~ age * sex + ph.ecog + pat.karno + wt.loss, data=lung_cat)
+print(mod5b)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3d AIC = ", round(aic(mod3d), 1)))
+print(paste0("mod4c AIC = ", round(aic(mod4c), 1)))
+print(paste0("mod5 AIC = ", round(aic(mod5), 1)))
+print(paste0("mod5b AIC = ", round(aic(mod5b), 1)))
+```
+
+The fit of the model is still significant but the AIC is much higher.
+
+We look at the Kaplan-Meier plot of ph.ecog when it is categorical.
+```{r}
+# visualize (KM plot) effect of ph.ecog
+ggsurvplot(survfit(Surv(time, event=had_event) ~ ph.ecog, data=lung_cat), 
+           xlab="Days", 
+           ylab="Overall survival probability",
+           pval = TRUE,
+           risk.table=FALSE,
+           conf.int=TRUE,
+           surv.median.line="hv")
+```
+
+We compute the log-rank to test the effect of ph.ecog on survival time.
+
+```{r}
+survdiff(Surv(time, had_event) ~ ph.ecog, lung_cat)
+```
+The test suggests that the ECOG score is statistically significant.
+
+We test the proportional hazards assumption for ph.ecog.
+
+```{r}
+m = survfit(Surv(time, had_event) ~ ph.ecog, lung_cat)
+s = summary(m)
+s_table = data.frame(s$strata, s$time, s$n.risk, s$n.event, s$n.censor, s$surv, s$lower, s$upper)
+s_table = s_table %>%
+              rename(strata=s.strata, time=s.time, surv=s.surv, lower=s.lower, upper=s.upper) %>%
+              mutate(negloglogsurv=-log(-log(surv)))
+```
+
+
+```{r}
+ggplot(s_table, aes(x=time, y=negloglogsurv, color=strata)) + 
+  geom_line(size=1.25) +
+  theme(text=element_text(size=16),
+        plot.title=element_text(hjust=0.5)) +
+  ylab("-ln(-ln(S(t)))") +
+  ggtitle("-log-log plot of survival time by ECOG score")
+```
+
+The curves cross, so the PH assumption is violated !
+
+We can also test with the Goodness of Fit (GOF) Testing Approach  based on the residuals defined by Schoenfeld.
+
+
+We fit a model with only the categorical ph.ecog.
+```{r}
+# statistical test for violation of PH assumption
+mod5c = coxph(Surv(time, had_event) ~ ph.ecog, data=lung_cat)
+print(mod5c) 
+print(paste0("mod5c AIC = ", round(aic(mod5c), 1)))
+
+test.ph <- cox.zph(mod5c)
+print(test.ph)
+ggcoxzph(test.ph)
+```
+
+Surprisingly, this test indicates that the PH assumption is not violated.
+
+As a remedy, we carry out a stratified Cox (SC) procedure for the analysis.
+
+The “stratified Cox model” is a modification of the Cox proportional hazards (PH) model that allows for control by “stratification” of a predictor that does not satisfy the PH assumption.
+
+
+The general SC model is:
+
+$$h_{g}(t, X) = h_{0g}(t)exp(\beta_{1}X_{i,1} + ... +\ beta_{p}X_{i,p})$$
+
+for g = 0, 1, 2 and 3 (the different values of the ECOG scores).
+
+In this model, the baseline hazard function $h_{0g}(t)$ is allowed to be different for each stratum. However, the coefficients $b_1$, $b_2$,..., $b_p$ are the same for each stratum. It is called the **No-Interaction Assumption** because the $\beta$’s in the model are the same for each subscript $g$. The no- interaction assumption means that the variables being stratified are assumed not to interact with the X’s in the model.
+
+
+Using SC, we can control for the ph.ecog variable – which does not satisfy the PH assumption – by stratification while simultaneously including in the model the other variables – which do satisfy the PH assumption.
+
+```{r}
+mod5d = coxph(Surv(time, had_event) ~ strata(ph.ecog) + sex*age + pat.karno + wt.loss, data=lung_cat)
+print(mod5d)
+```
+
+Note, that the results of the test do not include the variable ph.ecog anymore.
+
+
+
+```{r}
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3d AIC = ", round(aic(mod3d), 1)))
+print(paste0("mod4c AIC = ", round(aic(mod4c), 1)))
+print(paste0("mod5 AIC = ", round(aic(mod5), 1)))
+print(paste0("mod5b AIC = ", round(aic(mod5b), 1)))
+print(paste0("mod5d AIC = ", round(aic(mod5d), 1)))
+```
+
+
+The AIC of the last model is consequently lower (better). The model 6 is the bets so far.
+
+```{r}
+ggadjustedcurves(mod5d, data=(lung_cat %>% filter(ph.ecog != 3)))
+```
+
+
+<p>&nbsp;</p>
+
+#### 6) Model with age modeled as categorical
+
+
+<p>&nbsp;</p>
+
+```{r}
+lung_cat = lung_cat %>% 
+  mutate(age_grp = cut(lung$age, breaks=c(-Inf, 69, Inf), labels=c("39-69", "70+")))
+
+mod6 = coxph(Surv(time, had_event) ~ strata(ph.ecog) + sex*age_grp + pat.karno + wt.loss, data=lung_cat)
+print(mod6)
+print(paste0("mod1 AIC = ", round(aic(mod1), 1)))
+print(paste0("mod3d AIC = ", round(aic(mod3d), 1)))
+print(paste0("mod4c AIC = ", round(aic(mod4c), 1)))
+print(paste0("mod5 AIC = ", round(aic(mod5), 1)))
+print(paste0("mod5b AIC = ", round(aic(mod5b), 1)))
+print(paste0("mod5d AIC = ", round(aic(mod5d), 1)))
+print(paste0("mod6 AIC = ", round(aic(mod6), 1)))
+```
+
+The model is also significant and the AIC is equivalent with the previous model. We keep the model 6 as the final model.
+
+
+We perform the best subset selection via glmulti:
+
+```{r}
+lung2 <- lung %>% mutate(sex_age = as.numeric(sex)*age)
+models <- glmulti(Surv(time, had_event) ~ sex + age + sex_age + ph.ecog + ph.karno + pat.karno + meal.cal + wt.loss, 
+          data = lung2,
+          level = 1,               # No interaction considered
+          method = "h",            # Exhaustive approach
+          crit = "aic",            # AIC as criteria
+          confsetsize = 5,         # Keep 5 best models
+          plotty = F, report = F,  # No plot or interim reports
+          fitfunction = "coxph")   # coxph function
+
+models@formulas
+
+# slightly lower (better) AIC than above
+AIC(models@objects[[1]])
+AIC(models@objects[[2]])
+AIC(models@objects[[3]])
+AIC(models@objects[[4]])
+AIC(models@objects[[5]])
+```
+
+
+With this method, the best model has all variables!
+
+
+
+
+
+
+
+
+
+
+
